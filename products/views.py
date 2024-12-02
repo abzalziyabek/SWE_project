@@ -13,9 +13,10 @@ from django.http import JsonResponse, HttpResponse
 from .forms import ProductForm
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.storage import FileSystemStorage
-from xhtml2pdf import pisa
 from django.template.loader import get_template
-from io import BytesIO
+import io
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
 
 def try_get_image_url(product):
     """
@@ -272,12 +273,10 @@ def inventory_report(request):
     # Process data to calculate low stock items and turnover rate
     report_data = process_inventory_data(products)
     
-    # If "download" is specified in query parameters, return CSV or PDF
+    # If "download" is specified in query parameters, return PDF
     if 'download' in request.GET:
         report_format = request.GET.get('format', 'pdf')
-        if report_format == 'csv':
-            return generate_csv_report(report_data)
-        elif report_format == 'pdf':
+        if report_format == 'pdf':
             return generate_pdf_report(report_data)
     
     # If no download is requested, return data as JSON
@@ -309,37 +308,33 @@ def process_inventory_data(products):
     }
 
 # Function to generate PDF report
-def generate_pdf_report(report_data):
+def generate_pdf_report(data):
     """ Generate PDF file from the report data """
-    low_stock_items = report_data['low_stock_items']
-    
-    # Check if data exists and is non-empty
-    if not low_stock_items:
-        return HttpResponse("No data to generate PDF", status=400)
-    
+    if not isinstance(data, dict):
+        return Response({"error": "Invalid data format. Expected a JSON object."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create a BytesIO buffer to hold the PDF
     buffer = io.BytesIO()
+
+        # Generate PDF
     p = canvas.Canvas(buffer, pagesize=letter)
-    p.drawString(100, 750, "Inventory Report - Low Stock Items")
+    width, height = letter
 
-    y_position = 730
-    for item in low_stock_items:
-        # Debugging: Ensure data is being passed correctly
-        print(f"Generating PDF for: {item['name']} with Available: {item['quantity_available']} and Threshold: {item['low_stock_threshold']}")
-        
-        # Drawing the data onto the PDF
-        p.drawString(100, y_position, f"Name: {item['name']}, Available: {item['quantity_available']}, Threshold: {item['low_stock_threshold']}")
-        y_position -= 20
+        # Write the JSON data to the PDF
+    text_object = p.beginText(50, height - 50)  # Starting position
+    text_object.setFont("Helvetica", 12)
 
-        # Check for page overflow
-        if y_position < 50:
-            p.showPage()  # Create a new page if overflow
-            p.drawString(100, 750, "Inventory Report - Low Stock Items")
-            y_position = 730
-    
+    for key, value in data.items():
+        text_object.textLine(f"{key}: {value}")
+
+    p.drawText(text_object)
     p.showPage()
     p.save()
 
+        # Get the PDF data from the buffer
     buffer.seek(0)
+
+        # Return the PDF as an HTTP response
     response = HttpResponse(buffer, content_type='application/pdf')
-    response['Content-Disposition'] = 'attachment; filename="inventory_report.pdf"'
+    response['Content-Disposition'] = 'attachment; filename="output.pdf"'
     return response
